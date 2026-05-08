@@ -6,10 +6,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-// Different states of the application
+// Application screens
 const (
 	stateHome         = "home"
 	stateAdbCheck     = "adb"
@@ -18,30 +20,49 @@ const (
 	stateResults      = "results"
 )
 
-// model holds the application's state
-type model struct {
-	state    string
-	adbState AdbState
-	adbMsg   string
+// Package filter modes
+const (
+	filterAll      = 0
+	filterSystem   = 1
+	filterUser     = 2
+	filterSelected = 3
+)
 
-	// Package List State
+// model holds all application state
+type model struct {
+	state      string
+	adbState   AdbState
+	adbMsg     string
+	adbInfo    string
+	adbAndroid string
+
+	adbInstalled     bool
+	adbServerRunning bool
+	deviceConnected  bool
+	usbAuthorized    bool
+	shellAccess      bool
+
+	spinner spinner.Model
+
 	packages    []pkgItem
 	cursor      int
 	uadMetadata map[string]string
 
-	// Results
+	// Search & filter
+	searchQuery string
+	searchMode  bool
+	filterMode  int
+
 	results []string
 
-	// Dynamic layout
 	width  int
 	height int
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return m.spinner.Tick
 }
 
-// Initializes the model with ADB metadata and default states.
 func initialModel() model {
 	metadata := make(map[string]string)
 	data, err := os.ReadFile("uad_lists.json")
@@ -61,81 +82,206 @@ func initialModel() model {
 		}
 	}
 
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#94e2d5"))
+
 	return model{
 		state:       stateHome,
 		adbState:    StateNoDevice,
 		adbMsg:      "Scanning...",
+		spinner:     s,
 		uadMetadata: metadata,
+		filterMode:  filterAll,
 	}
 }
 
-// Update handles messages and updates the model's state.
+// filteredPackages returns packages matching current search query and filter mode.
+func (m model) filteredPackages() []pkgItem {
+	q := strings.ToLower(m.searchQuery)
+	var result []pkgItem
+	for _, p := range m.packages {
+		// Search filter
+		if q != "" {
+			if !strings.Contains(strings.ToLower(p.id), q) &&
+				!strings.Contains(strings.ToLower(p.name), q) {
+				continue
+			}
+		}
+		// Tab filter
+		switch m.filterMode {
+		case filterSelected:
+			if !p.selected {
+				continue
+			}
+		case filterSystem:
+			if !isSystemPackage(p.id) {
+				continue
+			}
+		case filterUser:
+			if isSystemPackage(p.id) {
+				continue
+			}
+		}
+		result = append(result, p)
+	}
+	return result
+}
+
+// isSystemPackage heuristically identifies Android system packages by prefix.
+func isSystemPackage(id string) bool {
+	systemPrefixes := []string{
+		"com.android", "com.google", "com.samsung", "com.sec",
+		"com.qualcomm", "com.mediatek", "com.huawei", "com.miui",
+		"com.oneplus", "com.lge", "com.motorola", "com.sony",
+		"android", "com.qti", "com.qcom",
+	}
+	for _, prefix := range systemPrefixes {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Update handles all incoming messages and keyboard events.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	// Update stored window dimensions on resize.
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
 
-	// Handle ADB check results and transition to package listing if ready.
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
 	case adbCheckMsg:
-		m.adbState = msg.state
-		m.adbMsg = msg.msg
-		if m.adbState == StateReady && m.state == stateAdbCheck {
-			return m, fetchPackages(m.uadMetadata)
+		m.adbInstalled = msg.AdbInstalled
+		m.adbServerRunning = msg.AdbServerRunning
+		m.deviceConnected = msg.DeviceConnected
+		m.usbAuthorized = msg.UsbAuthorized
+		m.shellAccess = msg.ShellAccess
+		m.adbInfo = msg.DeviceInfo
+		m.adbAndroid = msg.AndroidVersion
+		m.adbMsg = msg.OverallMessage
+
+		if !m.adbInstalled {
+			m.adbState = StateMissingADB
+		} else if !m.deviceConnected {
+			m.adbState = StateNoDevice
+		} else if !m.usbAuthorized || !m.shellAccess {
+			m.adbState = StateUnauthorized
+		} else {
+			m.adbState = StateReady
 		}
 		return m, nil
-	// Populate package list and transition to package view.
+
 	case packagesLoadedMsg:
 		m.packages = msg
 		m.state = statePackages
 		m.cursor = 0
+		m.filterMode = filterAll
+		m.searchQuery = ""
+		m.searchMode = false
 		return m, nil
-	// Display results after batch uninstall.
+
 	case uninstallFinishedMsg:
 		m.results = msg
 		m.state = stateResults
 		return m, nil
-	// Handle keyboard input for navigation and actions.
+
 	case tea.KeyMsg:
+		// Intercept all keystrokes when search mode is active
+		if m.searchMode && m.state == statePackages {
+			switch msg.String() {
+			case "esc":
+				m.searchMode = false
+				m.searchQuery = ""
+				m.cursor = 0
+			case "enter":
+				m.searchMode = false
+				m.cursor = 0
+			case "backspace":
+				if len(m.searchQuery) > 0 {
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+					m.cursor = 0
+				}
+			default:
+				// Accept printable characters
+				if len(msg.String()) == 1 {
+					m.searchQuery += msg.String()
+					m.cursor = 0
+				}
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
-		// Move cursor up in lists.
+
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
 			}
-		// Move cursor down in lists.
+
 		case "down", "j":
-			if m.cursor < len(m.packages)-1 {
+			filtered := m.filteredPackages()
+			if m.cursor < len(filtered)-1 {
 				m.cursor++
 			}
-		// Toggle package selection.
+
+		// Cycle through filter tabs
+		case "tab":
+			if m.state == statePackages {
+				m.filterMode = (m.filterMode + 1) % 4
+				m.cursor = 0
+			}
+
+		// Enter search mode
+		case "/":
+			if m.state == statePackages {
+				m.searchMode = true
+			}
+
+		// Toggle package selection (operates on filtered view)
 		case " ":
 			if m.state == statePackages {
-				m.packages[m.cursor].selected = !m.packages[m.cursor].selected
+				filtered := m.filteredPackages()
+				if m.cursor < len(filtered) {
+					targetID := filtered[m.cursor].id
+					for i := range m.packages {
+						if m.packages[i].id == targetID {
+							m.packages[i].selected = !m.packages[i].selected
+							break
+						}
+					}
+				}
 			}
-		// Progress through states or initiate actions.
+
 		case "enter":
 			if m.state == stateHome {
 				m.state = stateAdbCheck
 				return m, checkAdb()
 			}
+			if m.state == stateAdbCheck && m.adbState == StateReady {
+				m.adbMsg = "Scanning..."
+				return m, fetchPackages(m.uadMetadata)
+			}
 			if m.state == statePackages {
 				m.state = stateUninstalling
 				return m, runUninstall(m.packages)
 			}
-		// Refresh ADB
-		case "r":
 
+		case "r":
 			if m.state == stateAdbCheck {
+				m.adbMsg = "Scanning..."
 				restartAdbServer()
 				return m, checkAdb()
 			}
 
-		// Navigation back
 		case "b", "esc":
 			if m.state == stateResults || m.state == statePackages || m.state == stateAdbCheck {
 				m.state = stateHome
@@ -161,10 +307,9 @@ func (m model) View() string {
 	return "Unknown state"
 }
 
-// render home screen
 func main() {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
-	if err := p.Start(); err != nil {
+	if _, err := p.Run(); err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}

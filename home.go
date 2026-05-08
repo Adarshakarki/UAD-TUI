@@ -4,15 +4,18 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// render home screen
 func (m model) homeView() string {
 	const (
-		base    = "#1e1e2e" // Catppuccin Mocha Base
-		surface = "#313244" // Catppuccin Mocha Surface0
-		text    = "#cdd6f4" // Catppuccin Mocha Text
-		subtext = "#a6adc8" // Catppuccin Mocha Subtext0
-		mauve   = "#cba6f7" // Catppuccin Mocha Mauve
-		pink    = "#f5c2e7" // Catppuccin Mocha Pink
+		base    = "#1e1e2e"
+		surface = "#313244"
+		overlay = "#45475a"
+		text    = "#cdd6f4"
+		subtext = "#a6adc8"
+		mauve   = "#cba6f7"
+		pink    = "#f5c2e7"
+		teal    = "#94e2d5"
+		peach   = "#fab387"
+		green   = "#a6e3a1"
 	)
 
 	titleASCII := `
@@ -35,48 +38,98 @@ func (m model) homeView() string {
 ██║  ██║█████╗  ██████╔╝██║     ██║   ██║███████║   ██║   █████╗  ██████╔╝
 ██║  ██║██╔══╝  ██╔══██╗██║     ██║   ██║██╔══██║   ██║   ██╔══╝  ██╔══██╗
 ██████╔╝███████╗██║  ██║███████╗╚██████╔╝██║  ██║   ██║   ███████╗██║  ██║
-╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
-`
+╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝`
 
-	// Title color
 	title := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(pink)).
 		Bold(true).
 		Align(lipgloss.Center).
 		Render(titleASCII)
 
-	// subtitle
-	sub := lipgloss.NewStyle(). 
-		Foreground(lipgloss.Color(text)).
-		Align(lipgloss.Center).
-		Render("ADB-powered Android package manager")
+	// Divider line
+	divider := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(overlay)).
+		Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	// button
+	sub := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(subtext)).
+		Align(lipgloss.Center).
+		Render("ADB-powered Android package manager for power users")
+
+	// Feature badges
+	type feature struct {
+		icon, label, color string
+	}
+	features := []feature{
+		{"◈", "ADB Detection", teal},
+		{"◈", "Package Browser", mauve},
+		{"◈", "Batch Uninstall", peach},
+		{"◈", "Search & Filter", green},
+		{"◈", "Catppuccin UI", pink},
+	}
+
+	badgeStyle := lipgloss.NewStyle().
+		Padding(0, 2).
+		MarginLeft(1).
+		Border(lipgloss.RoundedBorder())
+
+	var badges []string
+	for _, f := range features {
+		badges = append(badges,
+			badgeStyle.
+				Foreground(lipgloss.Color(f.color)).
+				BorderForeground(lipgloss.Color(f.color)).
+				Render(f.icon+" "+f.label),
+		)
+	}
+	featureRow := lipgloss.NewStyle().
+		Align(lipgloss.Center).
+		Render(lipgloss.JoinHorizontal(lipgloss.Top, badges...))
+
+	// Warning notice
+	notice := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(peach)).
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(lipgloss.Color(peach)).
+		PaddingLeft(1).
+		Render("Warning: Removing system packages may affect device stability.\nProceed only if you know what you are doing.")
+
+	// CTA Button
 	btn := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(base)).
 		Background(lipgloss.Color(mauve)).
-		Padding(0, 5).
-		MarginTop(1).
+		Padding(0, 8).
 		Bold(true).
-		Render(" START ")
+		Render("  START  →")
 
-	// Footer
-	footer := lipgloss.NewStyle(). // Navigation hints at the bottom
-		Foreground(lipgloss.Color(subtext)).
-		Render("enter • q quit")
+	// Footer hints
+	kStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mauve)).Bold(true)
+	dStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(subtext))
+	sep := dStyle.Render("  •  ")
 
-	// Combine all elements vertically
+	footer := lipgloss.JoinHorizontal(lipgloss.Top,
+		kStyle.Render("enter"), dStyle.Render(" start"),
+		sep,
+		kStyle.Render("q"), dStyle.Render(" quit"),
+	)
+
+	// Stack all content
 	content := lipgloss.JoinVertical(
 		lipgloss.Center,
 		title,
+		divider,
+		"",
 		sub,
+		"",
+		featureRow,
+		"",
+		lipgloss.NewStyle().Align(lipgloss.Center).Render(notice),
 		"",
 		btn,
 		"",
 		footer,
 	)
 
-	// Styled card container for the content
 	card := lipgloss.NewStyle().
 		Background(lipgloss.Color(surface)).
 		Border(lipgloss.RoundedBorder()).
